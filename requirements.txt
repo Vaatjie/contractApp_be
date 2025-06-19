@@ -1,0 +1,5 @@
+Flask==2.2.5
+pg8000>=1.29.0
+PyPDF2==3.0.0
+reportlab==4.1.0
+flask-cors==3.0.10
