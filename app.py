@@ -366,6 +366,84 @@ def api_list_personalized_contracts():
     return jsonify(data)
 
 # ------------------------------------------------------------------------------
+# 11) UPLOAD PDF, FILL FIELDS & OPTIONAL SIGNATURE → /api/upload_and_sign
+#     (multipart/form-data: pdf_file, name, address, [signature])
+# ------------------------------------------------------------------------------
+@app.route('/api/upload_and_sign', methods=['POST'])
+def api_upload_and_sign():
+    if 'pdf_file' not in request.files:
+        return error_response("Missing 'pdf_file' file.", 400)
+
+    file = request.files['pdf_file']
+    fname = file.filename or 'uploaded.pdf'
+    if not fname.lower().endswith('.pdf'):
+        return error_response("Only PDF files are allowed.", 400)
+
+    name = request.form.get('name', '')
+    address = request.form.get('address', '')
+    signature_data_url = request.form.get('signature')
+
+    timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
+
+    original_path = os.path.join(app.config['UPLOAD_FOLDER'], f"original_{timestamp}.pdf")
+    pdf_bytes = file.read()
+    with open(original_path, 'wb') as f:
+        f.write(pdf_bytes)
+
+    pdf_reader = PdfReader(io.BytesIO(pdf_bytes))
+    pdf_writer = PdfWriter()
+    for page in pdf_reader.pages:
+        pdf_writer.add_page(page)
+
+    overlay_stream = io.BytesIO()
+    c = canvas.Canvas(overlay_stream, pagesize=letter)
+    c.drawString(100, 700, f"Name: {name}")
+    c.drawString(100, 680, f"Address: {address}")
+    c.save()
+    overlay_stream.seek(0)
+    overlay_pdf = PdfReader(overlay_stream)
+    pdf_writer.pages[0].merge_page(overlay_pdf.pages[0])
+
+    if signature_data_url:
+        sig_bytes = base64.b64decode(signature_data_url.split(',')[1])
+        image = ImageReader(io.BytesIO(sig_bytes))
+        sig_overlay = io.BytesIO()
+        c = canvas.Canvas(sig_overlay, pagesize=letter)
+        c.drawImage(image, 100, 100, width=200, height=100)
+        sign_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        c.drawString(100, 90, f"Signed on {sign_ts}")
+        c.save()
+        sig_overlay.seek(0)
+        overlay_pdf = PdfReader(sig_overlay)
+        pdf_writer.pages[-1].merge_page(overlay_pdf.pages[0])
+
+    output_stream = io.BytesIO()
+    pdf_writer.write(output_stream)
+    final_pdf = output_stream.getvalue()
+
+    final_path = os.path.join(app.config['UPLOAD_FOLDER'], f"signed_{timestamp}.pdf")
+    with open(final_path, 'wb') as f:
+        f.write(final_pdf)
+
+    return jsonify({
+        "success": True,
+        "original_path": original_path,
+        "signed_path": final_path
+    })
+
+# ------------------------------------------------------------------------------
+# 12) DOWNLOAD UPLOADED FILE → /api/download_uploaded/<path:filename>
+# ------------------------------------------------------------------------------
+@app.route('/api/download_uploaded/<path:filename>', methods=['GET'])
+def api_download_uploaded(filename):
+    return send_file(
+        os.path.join(app.config['UPLOAD_FOLDER'], filename),
+        mimetype='application/pdf',
+        as_attachment=True,
+        download_name=filename
+    )
+
+# ------------------------------------------------------------------------------
 # 404 for any other /api/... route
 # ------------------------------------------------------------------------------
 @app.errorhandler(404)
